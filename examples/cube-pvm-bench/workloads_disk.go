@@ -82,6 +82,57 @@ print(f'{statistics.mean(times)*1e6:.1f}')
 "`,
 			ParseResult: parseFloat,
 		},
+		{
+			Name:        "many-small-files",
+			Suite:       "disk",
+			Description: "Code generation pattern: create 2000 small files with fsync",
+			Unit:        "files/s",
+			HigherIsBetter: true,
+			Command: `python3 -c "
+import os,time
+DIR='/tmp/bench_files'
+os.makedirs(DIR,exist_ok=True)
+N=2000
+content=b'import os\nprint(\"hello\")\n'*20
+t=time.perf_counter()
+for i in range(N):
+    path=f'{DIR}/file_{i:04d}.py'
+    fd=os.open(path,os.O_CREAT|os.O_WRONLY|os.O_TRUNC)
+    os.write(fd,content)
+    os.fsync(fd)
+    os.close(fd)
+elapsed=time.perf_counter()-t
+for i in range(N): os.unlink(f'{DIR}/file_{i:04d}.py')
+os.rmdir(DIR)
+print(f'{N/elapsed:.0f}')
+"`,
+			ParseResult: parseFloat,
+		},
+		{
+			Name:        "concurrent-io",
+			Suite:       "disk",
+			Description: "Concurrent disk write: 4 processes x 20MB each",
+			Unit:        "MB/s",
+			HigherIsBetter: true,
+			Command: `python3 -c "
+import multiprocessing,os,time
+def writer(idx):
+    path=f'/tmp/bench_cio_{idx}'
+    fd=os.open(path,os.O_CREAT|os.O_RDWR|os.O_TRUNC)
+    data=b'x'*4096
+    for _ in range(5000):
+        os.write(fd,data)
+    os.fsync(fd)
+    os.close(fd)
+    os.unlink(path)
+t=time.perf_counter()
+with multiprocessing.Pool(4) as p:
+    p.map(writer,range(4))
+elapsed=time.perf_counter()-t
+print(f'{4*5000*4/1024/elapsed:.1f}')
+"`,
+			ParseResult: parseFloat,
+		},
 	}
 }
 

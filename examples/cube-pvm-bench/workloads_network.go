@@ -51,6 +51,50 @@ print(f'{total[0]*8/elapsed/1e9:.2f}')
 			Command:     `ping -c 20 -i 0.1 $(ip route | grep default | awk '{print $3}') 2>/dev/null | tail -1`,
 			ParseResult: parsePingOutput,
 		},
+		{
+			Name:        "concurrent-conns",
+			Suite:       "network",
+			Description: "Concurrent connections: 20 clients x 3 seconds",
+			Unit:        "Gbps",
+			HigherIsBetter: true,
+			Command: `python3 -c "
+import socket,time,threading,queue
+CONNS=20
+DURATION=3
+results=queue.Queue()
+def drain(c):
+    while True:
+        d=c.recv(65536)
+        if not d: break
+    c.close()
+def server():
+    s=socket.socket()
+    s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
+    s.bind(('127.0.0.1',19998));s.listen(CONNS)
+    while True:
+        c,_=s.accept()
+        threading.Thread(target=drain,args=(c,),daemon=True).start()
+def client(idx):
+    total=0
+    data=b'x'*65536
+    s=socket.socket()
+    s.connect(('127.0.0.1',19998))
+    start=time.perf_counter()
+    while time.perf_counter()-start<DURATION:
+        s.sendall(data)
+        total+=len(data)
+    s.close()
+    results.put(total)
+threading.Thread(target=server,daemon=True).start()
+time.sleep(0.1)
+threads=[threading.Thread(target=client,args=(i,)) for i in range(CONNS)]
+for t in threads: t.start()
+for t in threads: t.join()
+total=sum(results.get() for _ in range(CONNS))
+print(f'{total*8/DURATION/1e9:.2f}')
+"`,
+			ParseResult: parseFloat,
+		},
 	}
 }
 

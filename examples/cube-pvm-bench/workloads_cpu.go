@@ -60,5 +60,43 @@ print(f'{elapsed*1000:.2f}')
 "`,
 			ParseResult: parseFloat,
 		},
+		{
+			Name:        "multiproc-compute",
+			Suite:       "cpu",
+			Description: "Multi-process parallel compute: 4 workers x 10M ops",
+			Unit:        "Mops/s",
+			HigherIsBetter: true,
+			Command: `python3 -c "
+import multiprocessing,time
+def worker(_):
+    s=0
+    for i in range(10_000_000): s+=i*i
+    return s
+t=time.perf_counter()
+with multiprocessing.Pool(4) as p:
+    p.map(worker,range(4))
+elapsed=time.perf_counter()-t
+print(f'{4*10/elapsed:.2f}')
+"`,
+			ParseResult: parseFloat,
+		},
+		{
+			Name:        "json-parse",
+			Suite:       "cpu",
+			Description: "JSON parse throughput: 50K objects x 5 rounds",
+			Unit:        "MB/s",
+			HigherIsBetter: true,
+			Command: `python3 -c "
+import json,time
+data=[{'id':i,'name':f'item_{i}','values':list(range(100))} for i in range(50000)]
+blob=json.dumps(data)
+t=time.perf_counter()
+for _ in range(5):
+    parsed=json.loads(blob)
+elapsed=time.perf_counter()-t
+print(f'{5*len(blob)/elapsed/1e6:.2f}')
+"`,
+			ParseResult: parseFloat,
+		},
 	}
 }

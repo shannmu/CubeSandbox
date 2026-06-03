@@ -207,23 +207,322 @@ cube-pvm-bench [flags]
 
 ## 实现顺序 (TODO)
 
-- [ ] 1. 初始化项目: go.mod, Makefile, config.go, main.go 骨架
-- [ ] 2. 实现 workloads.go 接口定义 + workload 注册
-- [ ] 3. 实现 results.go 结果结构体与 JSON 序列化
-- [ ] 4. 实现 stats.go (从 cube-bench 移植 + 扩展)
-- [ ] 5. 实现 runner.go 编排逻辑 (SDK 集成)
-- [ ] 6. 实现 workloads_cpu.go
-- [ ] 7. 实现 workloads_memory.go
-- [ ] 8. 实现 workloads_disk.go
-- [ ] 9. 实现 workloads_network.go
-- [ ] 10. 实现 workloads_syscall.go
-- [ ] 11. 实现 workloads_lifecycle.go
-- [ ] 12. 实现 compare.go 对比逻辑
-- [ ] 13. 实现 theme.go (从 cube-bench 移植 + 扩展)
-- [ ] 14. 实现 report.go 终端报告渲染
-- [ ] 15. 实现 ui.go Bubbletea TUI
-- [ ] 16. 编写 README.md
-- [ ] 17. 验证: --dry-run 模式编译运行通过
+- [x] 1. 初始化项目: go.mod, Makefile, config.go, main.go 骨架
+- [x] 2. 实现 workloads.go 接口定义 + workload 注册
+- [x] 3. 实现 results.go 结果结构体与 JSON 序列化
+- [x] 4. 实现 stats.go (从 cube-bench 移植 + 扩展)
+- [x] 5. 实现 runner.go 编排逻辑 (SDK 集成)
+- [x] 6. 实现 workloads_cpu.go (micro-benchmark)
+- [x] 7. 实现 workloads_memory.go (micro-benchmark)
+- [x] 8. 实现 workloads_disk.go (micro-benchmark)
+- [x] 9. 实现 workloads_network.go (micro-benchmark)
+- [x] 10. 实现 workloads_syscall.go (micro-benchmark)
+- [x] 11. 实现 workloads_lifecycle.go
+- [x] 12. 实现 compare.go 对比逻辑
+- [x] 13. 实现 theme.go (从 cube-bench 移植 + 扩展)
+- [x] 14. 实现 report.go 终端报告渲染
+- [x] 15. 实现 ui.go Bubbletea TUI
+- [x] 16. 编写 README.md
+- [ ] 17. 添加真实 Agent 负载压力测试 (见下方)
+
+---
+
+## Phase 2: 真实 Agent 负载压力测试
+
+### 设计原则
+
+负载贴近 AI Agent 在 sandbox 中的真实使用形态：
+- 代码执行：多进程并行数据处理、JSON 解析
+- 包安装模拟：高频 fork/exec + 文件创建 + 模块导入
+- 文件操作：批量生成/读取小文件（代码生成）
+- 并发 I/O：多进程同时写磁盘（pip 下载解压）
+- 网络并发：多连接同时请求（API 调用）
+
+### 为什么这些 workload 能暴露 PVM 损耗
+
+| Workload | PVM 压力点 |
+|----------|-----------|
+| multiproc-compute | 多 vCPU 竞争, IPI 触发 VM-exit |
+| json-parse | 大堆分配, GC → 频繁 page fault 穿过 shadow PT |
+| multiproc-mmap | 大量 shadow page table 创建 (4 worker × 200MB) |
+| large-alloc-fragment | 频繁 minor fault, 堆增长穿过 shadow PT |
+| many-small-files | 高 syscall 频率 (每文件 open/write/fsync/close) |
+| concurrent-io | 多 vCPU 并发 VM-exit (IO 路径) |
+| concurrent-conns | socket syscall 风暴 + 调度器压力 |
+| pip-install-sim | fork+exec+mmap (新进程 = 完整 shadow PT 重建) |
+| concurrent-subprocess | 8 并发 Python 进程的 VM-exit 风暴 |
+
+---
+
+### CPU 套件 — 新增
+
+#### `multiproc-compute` (多进程并行计算)
+
+模拟 Agent 运行并行数据处理（如 pytest 并行 worker）
+
+```python
+import multiprocessing, time
+
+def worker(_):
+    s = 0
+    for i in range(10_000_000):
+        s += i * i
+    return s
+
+t = time.perf_counter()
+with multiprocessing.Pool(4) as p:
+    p.map(worker, range(4))  # 4 workers × 10M ops
+elapsed = time.perf_counter() - t
+print(f'{4*10/elapsed:.2f}')  # total Mops/s
+```
+
+- 指标: Mops/s, higher=better
+- 压力: 多 vCPU 同时满载，测 PVM 多核调度损耗
+
+#### `json-parse` (JSON 解析吞吐)
+
+模拟 Agent 解析大型 LLM 工具调用返回
+
+```python
+import json, time
+
+data = [{"id": i, "name": f"item_{i}", "values": list(range(100))} for i in range(50000)]
+blob = json.dumps(data)
+t = time.perf_counter()
+for _ in range(5):
+    parsed = json.loads(blob)
+elapsed = time.perf_counter() - t
+print(f'{5*len(blob)/elapsed/1e6:.2f}')  # MB/s
+```
+
+- 指标: MB/s, higher=better
+- 压力: 大量堆分配 + GC，触发 page fault
+
+---
+
+### Memory 套件 — 新增
+
+#### `multiproc-mmap` (多进程大规模映射)
+
+模拟 pip install 时多个子进程各自映射共享库
+
+```python
+import multiprocessing, mmap, time
+
+def worker(_):
+    regions = []
+    for _ in range(50):
+        m = mmap.mmap(-1, 4*1024*1024)  # 50 × 4MB = 200MB per worker
+        m[0:4096] = b'x' * 4096
+        regions.append(m)
+    for m in regions:
+        m.close()
+
+t = time.perf_counter()
+with multiprocessing.Pool(4) as p:
+    p.map(worker, range(4))  # 4 workers × 200MB = 800MB 页表压力
+elapsed = time.perf_counter() - t
+print(f'{4*50*4/elapsed:.0f}')  # MB/s
+```
+
+- 指标: MB/s, higher=better
+- 压力: 大量 shadow page table 条目创建，PVM 核心开销路径
+
+#### `large-alloc-fragment` (大量堆碎片分配)
+
+模拟 Agent 构建大型数据结构（DataFrame, dict）
+
+```python
+import time
+
+t = time.perf_counter()
+items = {}
+for i in range(500_000):
+    items[f'key_{i}'] = [i] * 10  # 500K keys × 10 元素 list
+total = sum(len(v) for v in items.values())
+elapsed = time.perf_counter() - t
+print(f'{elapsed*1000:.1f}')
+```
+
+- 指标: ms, lower=better
+- 压力: 频繁 minor page fault，堆持续增长
+
+---
+
+### Disk 套件 — 新增
+
+#### `many-small-files` (批量小文件创建)
+
+模拟 Agent 代码生成（写 2000 个 .py 文件）
+
+```python
+import os, time
+
+DIR = '/tmp/bench_files'
+os.makedirs(DIR, exist_ok=True)
+N = 2000
+content = b'import os\nprint("hello")\n' * 20  # ~500B per file
+t = time.perf_counter()
+for i in range(N):
+    path = f'{DIR}/file_{i:04d}.py'
+    fd = os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC)
+    os.write(fd, content)
+    os.fsync(fd)
+    os.close(fd)
+elapsed = time.perf_counter() - t
+for i in range(N):
+    os.unlink(f'{DIR}/file_{i:04d}.py')
+os.rmdir(DIR)
+print(f'{N/elapsed:.0f}')
+```
+
+- 指标: files/s, higher=better
+- 压力: 高频 syscall (open/write/fsync/close × 2000)
+
+#### `concurrent-io` (并发磁盘写)
+
+模拟 pip 下载解压时多进程同时写磁盘
+
+```python
+import multiprocessing, os, time
+
+def writer(idx):
+    path = f'/tmp/bench_cio_{idx}'
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_TRUNC)
+    data = b'x' * 4096
+    for _ in range(5000):
+        os.write(fd, data)
+    os.fsync(fd)
+    os.close(fd)
+    os.unlink(path)
+
+t = time.perf_counter()
+with multiprocessing.Pool(4) as p:
+    p.map(writer, range(4))
+elapsed = time.perf_counter() - t
+print(f'{4*5000*4/1024/elapsed:.1f}')  # MB/s aggregate
+```
+
+- 指标: MB/s, higher=better
+- 压力: 4 进程并发 IO，多 vCPU VM-exit 竞争
+
+---
+
+### Network 套件 — 新增
+
+#### `concurrent-conns` (多连接并发)
+
+模拟 Agent 并行调用多个 API
+
+```python
+import socket, time, threading, queue
+
+CONNS = 20
+DURATION = 3
+results = queue.Queue()
+
+def drain(c):
+    while True:
+        d = c.recv(65536)
+        if not d:
+            break
+    c.close()
+
+def server():
+    s = socket.socket()
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(('127.0.0.1', 19998))
+    s.listen(CONNS)
+    while True:
+        c, _ = s.accept()
+        threading.Thread(target=drain, args=(c,), daemon=True).start()
+
+def client(idx):
+    total = 0
+    data = b'x' * 65536
+    s = socket.socket()
+    s.connect(('127.0.0.1', 19998))
+    start = time.perf_counter()
+    while time.perf_counter() - start < DURATION:
+        s.sendall(data)
+        total += len(data)
+    s.close()
+    results.put(total)
+
+threading.Thread(target=server, daemon=True).start()
+time.sleep(0.1)
+threads = [threading.Thread(target=client, args=(i,)) for i in range(CONNS)]
+for t in threads: t.start()
+for t in threads: t.join()
+total = sum(results.get() for _ in range(CONNS))
+print(f'{total*8/DURATION/1e9:.2f}')
+```
+
+- 指标: Gbps, higher=better
+- 压力: 20 并发连接 socket 调用风暴 + 线程调度
+
+---
+
+### Syscall 套件 — 新增
+
+#### `pip-install-sim` (pip install 模拟)
+
+模拟真实 pip install 的模式: fork Python → import → 写文件 → 退出
+
+```python
+import subprocess, time
+
+N = 50
+t = time.perf_counter()
+for i in range(N):
+    subprocess.run(['python3', '-c', f'''
+import json, os, sys
+d = {{"pkg": "{i}", "deps": list(range(20))}}
+path = "/tmp/pkg_{i}.json"
+with open(path, "w") as f:
+    json.dump(d, f)
+os.unlink(path)
+'''], capture_output=True)
+elapsed = time.perf_counter() - t
+print(f'{elapsed/N*1000:.1f}')
+```
+
+- 指标: ms/iter, lower=better
+- 压力: 每次迭代 fork + 新进程完整 shadow PT 重建 + import + file IO
+
+#### `concurrent-subprocess` (并发子进程)
+
+模拟 Agent 同时运行测试/lint/format 等工具
+
+```python
+import subprocess, time, concurrent.futures
+
+CMD = ['python3', '-c', 's=sum(range(1_000_000));print(s)']
+N = 40
+t = time.perf_counter()
+with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+    futs = [ex.submit(subprocess.run, CMD, capture_output=True) for _ in range(N)]
+    concurrent.futures.wait(futs)
+elapsed = time.perf_counter() - t
+print(f'{N/elapsed:.1f}')
+```
+
+- 指标: procs/s, higher=better
+- 压力: 8 并发 Python 进程 VM-exit 风暴
+
+---
+
+### 需要修改的文件
+
+| 文件 | 变更 |
+|------|------|
+| `workloads_cpu.go` | 追加 multiproc-compute, json-parse |
+| `workloads_memory.go` | 追加 multiproc-mmap, large-alloc-fragment |
+| `workloads_disk.go` | 追加 many-small-files, concurrent-io |
+| `workloads_network.go` | 追加 concurrent-conns |
+| `workloads_syscall.go` | 追加 pip-install-sim, concurrent-subprocess |
+| `runner.go` | 更新 dryBaselines map |
+| `README.md` | 更新 workload 列表 |
 
 ---
 

@@ -8,12 +8,14 @@ This tool runs a suite of workloads **inside** CubeSandbox instances via the Go 
 
 | Suite | Workloads | What it measures |
 |-------|-----------|-----------------|
-| **cpu** | integer-arith, float-matrix, prime-sieve | Compute throughput |
-| **memory** | seq-bandwidth, random-latency, page-fault | Memory subsystem (shadow page table overhead) |
-| **disk** | seq-write, seq-read, random-4k, fsync-latency | Block I/O performance |
-| **network** | loopback-throughput, gateway-ping | Network stack overhead |
-| **syscall** | getpid-loop, mmap-cycle, fork-exec | VM-exit frequency and cost |
+| **cpu** | integer-arith, float-matrix, prime-sieve, **multiproc-compute**, **json-parse** | Compute throughput (single + multi-core) |
+| **memory** | seq-bandwidth, random-latency, page-fault, **multiproc-mmap**, **large-alloc-fragment** | Memory subsystem + shadow page table pressure |
+| **disk** | seq-write, seq-read, random-4k, fsync-latency, **many-small-files**, **concurrent-io** | Block I/O (sequential + agent-realistic patterns) |
+| **network** | loopback-throughput, gateway-ping, **concurrent-conns** | Network stack (single + multi-connection) |
+| **syscall** | getpid-loop, mmap-cycle, fork-exec, **pip-install-sim**, **concurrent-subprocess** | VM-exit cost under realistic process patterns |
 | **lifecycle** | create, snapshot, rollback, clone | Sandbox operation latency |
+
+**Bold** workloads simulate real AI Agent usage patterns (multi-process compute, package installation, code generation, concurrent API calls).
 
 ## Build
 

@@ -61,5 +61,46 @@ m.close();os.close(fd)
 "`,
 			ParseResult: parseFloat,
 		},
+		{
+			Name:        "multiproc-mmap",
+			Suite:       "memory",
+			Description: "Multi-process mmap pressure: 4 workers x 200MB",
+			Unit:        "MB/s",
+			HigherIsBetter: true,
+			Command: `python3 -c "
+import multiprocessing,mmap,time
+def worker(_):
+    regions=[]
+    for _ in range(50):
+        m=mmap.mmap(-1,4*1024*1024)
+        m[0:4096]=b'x'*4096
+        regions.append(m)
+    for m in regions: m.close()
+t=time.perf_counter()
+with multiprocessing.Pool(4) as p:
+    p.map(worker,range(4))
+elapsed=time.perf_counter()-t
+print(f'{4*50*4/elapsed:.0f}')
+"`,
+			ParseResult: parseFloat,
+		},
+		{
+			Name:        "large-alloc-fragment",
+			Suite:       "memory",
+			Description: "Heap fragmentation: 500K dict entries with lists",
+			Unit:        "ms",
+			HigherIsBetter: false,
+			Command: `python3 -c "
+import time
+t=time.perf_counter()
+items={}
+for i in range(500_000):
+    items[f'key_{i}']=[i]*10
+total=sum(len(v) for v in items.values())
+elapsed=time.perf_counter()-t
+print(f'{elapsed*1000:.1f}')
+"`,
+			ParseResult: parseFloat,
+		},
 	}
 }
