@@ -25,7 +25,11 @@ type Config struct {
 	NoTUI       bool
 	JSONOnly    bool
 	Verbose     bool
-	DryRun      bool
+	DryRun         bool
+	Local          bool
+	Observe        bool
+	IperfServerIP   string
+	IperfServerPort string
 }
 
 var allSuites = []string{"cpu", "memory", "disk", "network", "syscall", "lifecycle"}
@@ -42,7 +46,7 @@ func parseConfig() *Config {
 	flag.IntVar(&cfg.Warmup, "warmup", 1, "Warmup iterations")
 	flag.IntVar(&cfg.Concurrency, "c", 5, "Concurrency for lifecycle benchmarks")
 	flag.IntVar(&cfg.Concurrency, "concurrency", 5, "Concurrency for lifecycle benchmarks")
-	flag.StringVar(&cfg.Output, "o", "", "Export JSON results to file")
+	flag.StringVar(&cfg.Output, "o", "", "Export JSON results to file (default: pvm.json or ecs.json)")
 	flag.StringVar(&cfg.Output, "output", "", "Export JSON results to file")
 	flag.StringVar(&cfg.Baseline, "b", "", "Load prior run JSON for comparison")
 	flag.StringVar(&cfg.Baseline, "baseline", "", "Load prior run JSON for comparison")
@@ -58,6 +62,10 @@ func parseConfig() *Config {
 	flag.BoolVar(&cfg.JSONOnly, "json", false, "Output JSON only to stdout")
 	flag.BoolVar(&cfg.Verbose, "verbose", false, "Show raw command output")
 	flag.BoolVar(&cfg.DryRun, "dry-run", false, "Simulate workloads with synthetic data")
+	flag.BoolVar(&cfg.Local, "local", false, "Run benchmarks locally (for ECS baseline) instead of in a sandbox")
+	flag.BoolVar(&cfg.Observe, "observe", false, "Collect host-side RSS/CPU metrics during workload execution")
+	flag.StringVar(&cfg.IperfServerIP, "iperf-server-ip", "", "iperf3 server IP (overrides IPERF3_SERVER_IP)")
+	flag.StringVar(&cfg.IperfServerPort, "iperf-server-port", "", "iperf3 server port (overrides IPERF3_SERVER_PORT, default: 5201)")
 
 	flag.Parse()
 
@@ -87,6 +95,15 @@ func parseConfig() *Config {
 		if cfg.APIKey == "" {
 			cfg.APIKey = "dry-run"
 		}
+	} else if cfg.Local {
+		// Local mode: no SDK credentials needed, filter out lifecycle suite
+		filtered := cfg.Suites[:0]
+		for _, s := range cfg.Suites {
+			if s != "lifecycle" {
+				filtered = append(filtered, s)
+			}
+		}
+		cfg.Suites = filtered
 	} else {
 		if cfg.Template == "" {
 			cfg.Template = firstEnv("CUBE_TEMPLATE_ID")
@@ -96,6 +113,24 @@ func parseConfig() *Config {
 		}
 		if cfg.APIKey == "" {
 			cfg.APIKey = firstEnv("CUBE_API_KEY", "E2B_API_KEY")
+		}
+	}
+
+	if cfg.IperfServerIP == "" {
+		cfg.IperfServerIP = firstEnv("IPERF3_SERVER_IP")
+	}
+	if cfg.IperfServerPort == "" {
+		cfg.IperfServerPort = firstEnv("IPERF3_SERVER_PORT")
+	}
+	if cfg.IperfServerPort == "" {
+		cfg.IperfServerPort = "5201"
+	}
+
+	if cfg.Output == "" {
+		if cfg.Local {
+			cfg.Output = "ecs.json"
+		} else {
+			cfg.Output = "pvm.json"
 		}
 	}
 

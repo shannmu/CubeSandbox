@@ -21,15 +21,6 @@ func lifecycleWorkloads() []Workload {
 			ParseResult:    parseFloat,
 		},
 		{
-			Name:           "rollback",
-			Suite:          "lifecycle",
-			Description:    "Sandbox rollback latency",
-			Unit:           "ms",
-			HigherIsBetter: false,
-			Command:        "__lifecycle_rollback__",
-			ParseResult:    parseFloat,
-		},
-		{
 			Name:           "clone",
 			Suite:          "lifecycle",
 			Description:    "Sandbox clone (snapshot + create-from-snapshot)",

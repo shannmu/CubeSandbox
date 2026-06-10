@@ -39,12 +39,13 @@ type SuiteResult struct {
 }
 
 type WorkloadResult struct {
-	Name           string    `json:"name"`
-	Unit           string    `json:"unit"`
-	HigherIsBetter bool      `json:"higher_is_better"`
-	Samples        []float64 `json:"samples"`
-	Stats          StatBlock `json:"stats"`
-	Errors         []string  `json:"errors,omitempty"`
+	Name           string        `json:"name"`
+	Unit           string        `json:"unit"`
+	HigherIsBetter bool          `json:"higher_is_better"`
+	Samples        []float64     `json:"samples"`
+	Stats          StatBlock     `json:"stats"`
+	Errors         []string      `json:"errors,omitempty"`
+	Observations   *Observations `json:"observations,omitempty"`
 }
 
 type StatBlock struct {

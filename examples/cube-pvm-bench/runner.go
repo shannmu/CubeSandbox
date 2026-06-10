@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -54,6 +57,8 @@ func RunAll(ctx context.Context, cfg *Config, suites []Suite, progressCh chan<- 
 
 	if cfg.DryRun {
 		runDry(ctx, cfg, suites, run, progressCh)
+	} else if cfg.Local {
+		runLocal(ctx, cfg, suites, run, progressCh)
 	} else {
 		runReal(ctx, cfg, suites, run, progressCh)
 	}
@@ -76,40 +81,25 @@ func RunAll(ctx context.Context, cfg *Config, suites []Suite, progressCh chan<- 
 }
 
 func runReal(ctx context.Context, cfg *Config, suites []Suite, run *BenchmarkRun, progressCh chan<- ProgressEvent) {
-	sdkCfg := cubesandbox.Config{
-		APIURL:     cfg.APIURL,
-		APIKey:     cfg.APIKey,
-		TemplateID: cfg.Template,
-		Timeout:    cfg.Timeout,
+	sdkCfg := cubesandbox.NewConfigFromEnv()
+	if cfg.APIURL != "" {
+		sdkCfg.APIURL = cfg.APIURL
+	}
+	if cfg.APIKey != "" {
+		sdkCfg.APIKey = cfg.APIKey
+	}
+	if cfg.Template != "" {
+		sdkCfg.TemplateID = cfg.Template
+	}
+	if cfg.Timeout > 0 {
+		sdkCfg.Timeout = cfg.Timeout
 	}
 	client := cubesandbox.NewClient(sdkCfg)
 	defer client.Close()
 
-	hasNonLifecycle := false
-	for _, s := range suites {
-		if s.Name != "lifecycle" {
-			hasNonLifecycle = true
-			break
-		}
-	}
-
-	var sandbox *cubesandbox.Sandbox
-	if hasNonLifecycle {
-		var err error
-		sandbox, err = client.Create(ctx, cubesandbox.CreateOptions{})
-		if err != nil {
-			if progressCh != nil {
-				progressCh <- ProgressEvent{Err: fmt.Sprintf("failed to create sandbox: %v", err)}
-			}
-			return
-		}
-		defer sandbox.Kill(ctx)
-
-		info, err := sandbox.GetInfo(ctx)
-		if err == nil {
-			run.Environment.SandboxCPU = info.CPUCount
-			run.Environment.SandboxMem = info.MemoryMB
-		}
+	if cfg.Verbose {
+		fmt.Fprintf(os.Stderr, "[diag] SDK config: APIURL=%s ProxyNodeIP=%s ProxyPort=%d ProxyScheme=%s SandboxDomain=%s\n",
+			sdkCfg.APIURL, sdkCfg.ProxyNodeIP, sdkCfg.ProxyPortHTTP, sdkCfg.ProxyScheme, sdkCfg.SandboxDomain)
 	}
 
 	for _, suite := range suites {
@@ -123,7 +113,53 @@ func runReal(ctx context.Context, cfg *Config, suites []Suite, run *BenchmarkRun
 		var workloadResults []WorkloadResult
 
 		for _, wl := range suite.Workloads {
-			wr := runWorkload(ctx, cfg, sandbox, wl, progressCh)
+			createOpts := cubesandbox.CreateOptions{}
+			if wl.Suite == "network" && cfg.IperfServerIP != "" {
+				allowInternet := true
+				createOpts.AllowInternetAccess = &allowInternet
+				createOpts.Network = cubesandbox.NetworkOptions{
+					AllowOut: []string{cfg.IperfServerIP + "/32"},
+				}
+			}
+			sandbox, err := client.Create(ctx, createOpts)
+			if err != nil {
+				if progressCh != nil {
+					progressCh <- ProgressEvent{Err: fmt.Sprintf("failed to create sandbox for %s/%s: %v", wl.Suite, wl.Name, err)}
+				}
+				workloadResults = append(workloadResults, WorkloadResult{
+					Name:           wl.Name,
+					Unit:           wl.Unit,
+					HigherIsBetter: wl.HigherIsBetter,
+					Errors:         []string{fmt.Sprintf("sandbox create: %v", err)},
+				})
+				continue
+			}
+
+			if run.Environment.SandboxCPU == 0 {
+				if info, err := sandbox.GetInfo(ctx); err == nil {
+					run.Environment.SandboxCPU = info.CPUCount
+					run.Environment.SandboxMem = info.MemoryMB
+				}
+			}
+
+			if cfg.Verbose {
+				fmt.Fprintf(os.Stderr, "[diag] sandbox for %s/%s: ID=%s\n", wl.Suite, wl.Name, sandbox.SandboxID)
+			}
+
+			var wr WorkloadResult
+			if cfg.Observe {
+				collectors := DefaultCollectors()
+				stop, obsCh := StartObserver(ctx, sandbox.SandboxID, time.Second, collectors)
+				wr = runWorkload(ctx, cfg, sandbox, wl, progressCh)
+				stop()
+				wr.Observations = <-obsCh
+				if cfg.Verbose && wr.Observations != nil {
+					fmt.Fprintf(os.Stderr, "[observe] %s/%s: %s\n", wl.Suite, wl.Name, formatObservations(wr.Observations))
+				}
+			} else {
+				wr = runWorkload(ctx, cfg, sandbox, wl, progressCh)
+			}
+			sandbox.Kill(ctx)
 			workloadResults = append(workloadResults, wr)
 		}
 
@@ -135,6 +171,19 @@ func runReal(ctx context.Context, cfg *Config, suites []Suite, run *BenchmarkRun
 	}
 }
 
+func wrapCommand(cmd string) string {
+	encoded := base64.StdEncoding.EncodeToString([]byte(cmd))
+	return fmt.Sprintf(`import subprocess,sys,base64
+cmd = base64.b64decode("%s").decode()
+r = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+sys.stdout.write(r.stdout)
+if r.stderr:
+    sys.stderr.write(r.stderr)
+if r.returncode != 0:
+    raise RuntimeError(f"exit {r.returncode}: {r.stderr.strip()}")
+`, encoded)
+}
+
 func runWorkload(ctx context.Context, cfg *Config, sandbox *cubesandbox.Sandbox, wl Workload, progressCh chan<- ProgressEvent) WorkloadResult {
 	wr := WorkloadResult{
 		Name:           wl.Name,
@@ -142,9 +191,10 @@ func runWorkload(ctx context.Context, cfg *Config, sandbox *cubesandbox.Sandbox,
 		HigherIsBetter: wl.HigherIsBetter,
 	}
 
+	code := wrapCommand(wl.Command)
 	totalIter := cfg.Warmup + cfg.Iterations
 	for i := 0; i < totalIter; i++ {
-		result, err := sandbox.Commands().Run(ctx, wl.Command, cubesandbox.CommandOptions{
+		exec, err := sandbox.RunCode(ctx, code, cubesandbox.RunCodeOptions{
 			Timeout: cfg.Timeout,
 		})
 		if err != nil {
@@ -154,15 +204,17 @@ func runWorkload(ctx context.Context, cfg *Config, sandbox *cubesandbox.Sandbox,
 			continue
 		}
 
-		if result.ExitCode != 0 {
+		if exec.Error != nil {
 			if i >= cfg.Warmup {
-				errMsg := fmt.Sprintf("exit %d: %s", result.ExitCode, strings.TrimSpace(result.Stderr))
+				errMsg := fmt.Sprintf("%s: %s", exec.Error.Name, exec.Error.Value)
 				wr.Errors = append(wr.Errors, errMsg)
 			}
 			continue
 		}
 
-		val, err := wl.ParseResult(result.Stdout, result.Stderr)
+		stdout := strings.Join(exec.Logs.Stdout, "")
+		stderr := strings.Join(exec.Logs.Stderr, "")
+		val, err := wl.ParseResult(stdout, stderr)
 		if err != nil {
 			if i >= cfg.Warmup {
 				wr.Errors = append(wr.Errors, err.Error())
@@ -202,10 +254,6 @@ func runLifecycleSuite(ctx context.Context, cfg *Config, client *cubesandbox.Cli
 	// Snapshot benchmark
 	snapshotResult := benchmarkSnapshot(ctx, cfg, client, progressCh)
 	workloadResults = append(workloadResults, snapshotResult)
-
-	// Rollback benchmark
-	rollbackResult := benchmarkRollback(ctx, cfg, client, progressCh)
-	workloadResults = append(workloadResults, rollbackResult)
 
 	// Clone benchmark
 	cloneResult := benchmarkClone(ctx, cfg, client, progressCh)
@@ -264,7 +312,7 @@ func benchmarkSnapshot(ctx context.Context, cfg *Config, client *cubesandbox.Cli
 
 	for i := 0; i < cfg.Warmup+cfg.Iterations; i++ {
 		t0 := time.Now()
-		err := doHTTP(ctx, cfg, "POST", "/sandboxes/"+url.PathEscape(sandbox.SandboxID)+"/snapshots", nil)
+		err := doHTTP(ctx, cfg, "POST", "/sandboxes/"+url.PathEscape(sandbox.SandboxID)+"/snapshots", map[string]any{})
 		elapsed := float64(time.Since(t0).Microseconds()) / 1000.0
 
 		if err != nil {
@@ -303,14 +351,14 @@ func benchmarkRollback(ctx context.Context, cfg *Config, client *cubesandbox.Cli
 	defer sandbox.Kill(ctx)
 
 	// Take a snapshot first
-	if err := doHTTP(ctx, cfg, "POST", "/sandboxes/"+url.PathEscape(sandbox.SandboxID)+"/snapshots", nil); err != nil {
+	if err := doHTTP(ctx, cfg, "POST", "/sandboxes/"+url.PathEscape(sandbox.SandboxID)+"/snapshots", map[string]any{}); err != nil {
 		wr.Errors = append(wr.Errors, fmt.Sprintf("snapshot setup: %v", err))
 		return wr
 	}
 
 	for i := 0; i < cfg.Warmup+cfg.Iterations; i++ {
 		t0 := time.Now()
-		err := doHTTP(ctx, cfg, "POST", "/sandboxes/"+url.PathEscape(sandbox.SandboxID)+"/rollback", nil)
+		err := doHTTP(ctx, cfg, "POST", "/sandboxes/"+url.PathEscape(sandbox.SandboxID)+"/rollback", map[string]any{})
 		elapsed := float64(time.Since(t0).Microseconds()) / 1000.0
 
 		if err != nil {
@@ -351,7 +399,7 @@ func benchmarkClone(ctx context.Context, cfg *Config, client *cubesandbox.Client
 	for i := 0; i < cfg.Warmup+cfg.Iterations; i++ {
 		t0 := time.Now()
 		// Snapshot + create from snapshot
-		snapErr := doHTTP(ctx, cfg, "POST", "/sandboxes/"+url.PathEscape(sandbox.SandboxID)+"/snapshots", nil)
+		snapErr := doHTTP(ctx, cfg, "POST", "/sandboxes/"+url.PathEscape(sandbox.SandboxID)+"/snapshots", map[string]any{})
 		if snapErr != nil {
 			if i >= cfg.Warmup {
 				wr.Errors = append(wr.Errors, fmt.Sprintf("snapshot: %v", snapErr))
@@ -418,6 +466,110 @@ func doHTTP(ctx context.Context, cfg *Config, method, path string, body any) err
 	return nil
 }
 
+// --- Local mode (ECS baseline) ---
+
+func runLocal(ctx context.Context, cfg *Config, suites []Suite, run *BenchmarkRun, progressCh chan<- ProgressEvent) {
+	run.Environment.SandboxCPU = runtime.NumCPU()
+	run.Environment.SandboxMem = localMemoryMB()
+
+	for _, suite := range suites {
+		suiteStart := time.Now()
+		var workloadResults []WorkloadResult
+
+		for _, wl := range suite.Workloads {
+			if cfg.Verbose {
+				fmt.Fprintf(os.Stderr, "[local] running %s/%s\n", wl.Suite, wl.Name)
+			}
+			wr := runWorkloadLocal(ctx, cfg, wl, progressCh)
+			workloadResults = append(workloadResults, wr)
+		}
+
+		run.Suites[suite.Name] = SuiteResult{
+			Name:      suite.Name,
+			Workloads: workloadResults,
+			Duration:  time.Since(suiteStart).Seconds(),
+		}
+	}
+}
+
+func runWorkloadLocal(ctx context.Context, cfg *Config, wl Workload, progressCh chan<- ProgressEvent) WorkloadResult {
+	wr := WorkloadResult{
+		Name:           wl.Name,
+		Unit:           wl.Unit,
+		HigherIsBetter: wl.HigherIsBetter,
+	}
+
+	totalIter := cfg.Warmup + cfg.Iterations
+	for i := 0; i < totalIter; i++ {
+		cmdCtx, cancel := context.WithTimeout(ctx, cfg.Timeout)
+		cmd := exec.CommandContext(cmdCtx, "bash", "-c", wl.Command)
+		var stdoutBuf, stderrBuf bytes.Buffer
+		cmd.Stdout = &stdoutBuf
+		cmd.Stderr = &stderrBuf
+		err := cmd.Run()
+		cancel()
+
+		stdout := stdoutBuf.String()
+		stderr := stderrBuf.String()
+
+		if cfg.Verbose {
+			fmt.Fprintf(os.Stderr, "[local] %s iter=%d stdout=%d bytes stderr=%d bytes err=%v\n",
+				wl.Name, i, len(stdout), len(stderr), err)
+		}
+
+		if err != nil {
+			if i >= cfg.Warmup {
+				wr.Errors = append(wr.Errors, fmt.Sprintf("exec: %v (stderr: %s)", err, strings.TrimSpace(stderr)))
+			}
+			continue
+		}
+
+		val, parseErr := wl.ParseResult(stdout, stderr)
+		if parseErr != nil {
+			if i >= cfg.Warmup {
+				wr.Errors = append(wr.Errors, parseErr.Error())
+			}
+			continue
+		}
+
+		if i >= cfg.Warmup {
+			wr.Samples = append(wr.Samples, val)
+			if progressCh != nil {
+				progressCh <- ProgressEvent{
+					Suite:    wl.Suite,
+					Workload: wl.Name,
+					Iter:     i - cfg.Warmup + 1,
+					Total:    cfg.Iterations,
+					Value:    val,
+					Unit:     wl.Unit,
+				}
+			}
+		}
+	}
+
+	if len(wr.Samples) > 0 {
+		wr.Stats = computeStats(wr.Samples)
+	}
+	return wr
+}
+
+func localMemoryMB() int {
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "MemTotal:") {
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				kb, _ := strconv.Atoi(fields[1])
+				return kb / 1024
+			}
+		}
+	}
+	return 0
+}
+
 // --- Dry-run mode ---
 
 func runDry(_ context.Context, cfg *Config, suites []Suite, run *BenchmarkRun, progressCh chan<- ProgressEvent) {
@@ -465,34 +617,53 @@ func runDry(_ context.Context, cfg *Config, suites []Suite, run *BenchmarkRun, p
 }
 
 var dryBaselines = map[string]float64{
-	"integer-arith":         45.0,
-	"float-matrix":          28.0,
-	"prime-sieve":           850.0,
-	"multiproc-compute":     160.0,
-	"json-parse":            120.0,
-	"seq-bandwidth":         2.5,
-	"random-latency":        120.0,
-	"page-fault":            380.0,
-	"multiproc-mmap":        3200.0,
-	"large-alloc-fragment":  450.0,
-	"seq-write":             450.0,
-	"seq-read":              1200.0,
-	"random-4k":             15000.0,
-	"fsync-latency":         250.0,
-	"many-small-files":      1500.0,
-	"concurrent-io":         280.0,
-	"loopback-throughput":   8.5,
-	"gateway-ping":          0.3,
-	"concurrent-conns":      12.0,
-	"getpid-loop":           180.0,
-	"mmap-cycle":            12.0,
-	"fork-exec":             4.5,
-	"pip-install-sim":       35.0,
-	"concurrent-subprocess": 25.0,
-	"create":                65.0,
-	"snapshot":              45.0,
-	"rollback":              70.0,
-	"clone":                 130.0,
+	// cpu
+	"cpu-int-add":        0.8,
+	"cpu-int-div":        5.0,
+	"cpu-double-add":     1.2,
+	"cpu-aes-1t":         900.0,
+	"cpu-aes-mt":         3200.0,
+	"cpu-sha256-1t":      600.0,
+	"cpu-sha256-mt":      2100.0,
+	"cpu-ipc-unix-lat":   8.0,
+	"cpu-ipc-unix-bw":    5000.0,
+	"cpu-compress-gzip":  80.0,
+	// memory
+	"mem-bandwidth-rd": 12000.0,
+	"mem-bandwidth-wr": 8000.0,
+	"mem-bandwidth-cp": 6000.0,
+	"mem-latency":      80.0,
+	"mem-sysbench-rd":  5000.0,
+	"mem-sysbench-wr":  3500.0,
+	// memory (lmbench additions)
+	"lat-mmap":      15.0,
+	"lat-pagefault": 3.0,
+	"bw-mmap-rd":    10000.0,
+	// disk (fio)
+	"seq-write":    450.0,
+	"seq-read":     1200.0,
+	"rand-read-4k":      15000.0,
+	"rand-write-4k":     8000.0,
+	"fsync-latency":     250.0,
+	"mixed-randrw":      20000.0,
+	"small-file-create": 1500.0,
+	// network
+	"tcp-stream":   25.0,
+	"tcp-parallel": 40.0,
+	"udp-pps":     50000.0,
+	"lat-connect": 30.0,
+	// syscall (lmbench, microseconds)
+	"lat-syscall-null":  0.1,
+	"lat-syscall-read":  0.15,
+	"lat-syscall-write": 0.15,
+	"lat-proc-fork":     100.0,
+	"lat-proc-exec":     300.0,
+	"lat-ctx":           3.0,
+	"lat-select":        8.0,
+	// lifecycle
+	"create":   65.0,
+	"snapshot": 45.0,
+	"clone":    130.0,
 }
 
 func dryValue(wl Workload) float64 {

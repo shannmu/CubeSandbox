@@ -32,7 +32,7 @@ func main() {
 		T = DetectTheme()
 	}
 
-	if !cfg.DryRun {
+	if !cfg.DryRun && !cfg.Local {
 		if cfg.Template == "" {
 			fatal("template ID not set. Use -t or set CUBE_TEMPLATE_ID.")
 		}
@@ -44,7 +44,16 @@ func main() {
 		}
 	}
 
-	suites, err := getSuites(cfg.Suites)
+	if !cfg.DryRun {
+		for _, s := range cfg.Suites {
+			if s == "network" && cfg.IperfServerIP == "" {
+				fatal("iperf3 server IP not set. Use --iperf-server-ip or set IPERF3_SERVER_IP. Or skip network suite with -s cpu,memory,disk,syscall")
+			}
+		}
+	}
+
+	reg := buildRegistry(cfg)
+	suites, err := getSuites(cfg.Suites, reg)
 	if err != nil {
 		fatal(err.Error())
 	}
@@ -54,6 +63,9 @@ func main() {
 		renderConfigPanel(cfg)
 		if cfg.DryRun {
 			renderDryRunNotice()
+		}
+		if cfg.Local {
+			renderLocalNotice()
 		}
 	}
 
@@ -129,13 +141,26 @@ func renderBanner() {
 }
 
 func renderConfigPanel(cfg *Config) {
-	kvs := []kvPair{
-		{"Template", cfg.Template},
-		{"API URL", cfg.APIURL},
-		{"Suites", joinSuites(cfg.Suites)},
-		{"Iterations", fmt.Sprintf("%d (warmup: %d)", cfg.Iterations, cfg.Warmup)},
-		{"Concurrency", fmt.Sprintf("%d", cfg.Concurrency)},
-		{"Timeout", cfg.Timeout.String()},
+	var kvs []kvPair
+	if cfg.Local {
+		kvs = []kvPair{
+			{"Mode", "Local (ECS baseline)"},
+			{"Suites", joinSuites(cfg.Suites)},
+			{"Iterations", fmt.Sprintf("%d (warmup: %d)", cfg.Iterations, cfg.Warmup)},
+			{"Timeout", cfg.Timeout.String()},
+		}
+	} else {
+		kvs = []kvPair{
+			{"Template", cfg.Template},
+			{"API URL", cfg.APIURL},
+			{"Suites", joinSuites(cfg.Suites)},
+			{"Iterations", fmt.Sprintf("%d (warmup: %d)", cfg.Iterations, cfg.Warmup)},
+			{"Concurrency", fmt.Sprintf("%d", cfg.Concurrency)},
+			{"Timeout", cfg.Timeout.String()},
+		}
+	}
+	if cfg.IperfServerIP != "" {
+		kvs = append(kvs, kvPair{"iperf3 Server", fmt.Sprintf("%s:%s", cfg.IperfServerIP, cfg.IperfServerPort)})
 	}
 	if cfg.Label != "" {
 		kvs = append(kvs, kvPair{"Label", T.Accent.Render(cfg.Label)})
@@ -161,6 +186,19 @@ func renderDryRunNotice() {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(T.Warn.GetForeground()).
+		Padding(0, 2).
+		Width(80).
+		Render(content)
+	fmt.Println(box)
+	fmt.Println()
+}
+
+func renderLocalNotice() {
+	content := fmt.Sprintf("  %s - running benchmarks directly on this machine (lifecycle suite skipped)",
+		T.Accent.Bold(true).Render("LOCAL MODE"))
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(T.Accent.GetForeground()).
 		Padding(0, 2).
 		Width(80).
 		Render(content)

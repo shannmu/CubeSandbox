@@ -1,102 +1,102 @@
 package main
 
+import "fmt"
+
 func cpuWorkloads() []Workload {
 	return []Workload{
+		// --- Single-core: arithmetic latency ---
 		{
-			Name:        "integer-arith",
-			Suite:       "cpu",
-			Description: "Integer arithmetic: sum 50M integers",
-			Unit:        "Mops/s",
-			HigherIsBetter: true,
-			Command: `python3 -c "
-import time
-N=50_000_000
-t=time.perf_counter()
-s=0
-for i in range(N): s+=i
-elapsed=time.perf_counter()-t
-print(f'{N/elapsed/1e6:.2f}')
-"`,
-			ParseResult: parseFloat,
-		},
-		{
-			Name:        "float-matrix",
-			Suite:       "cpu",
-			Description: "Floating point: 300x300 matrix multiply",
-			Unit:        "MFLOPS",
-			HigherIsBetter: true,
-			Command: `python3 -c "
-import time,random
-N=300
-random.seed(42)
-A=[[random.random() for _ in range(N)] for _ in range(N)]
-B=[[random.random() for _ in range(N)] for _ in range(N)]
-t=time.perf_counter()
-C=[[sum(A[i][k]*B[k][j] for k in range(N)) for j in range(N)] for i in range(N)]
-elapsed=time.perf_counter()-t
-print(f'{2*N**3/elapsed/1e6:.2f}')
-"`,
-			ParseResult: parseFloat,
-		},
-		{
-			Name:        "prime-sieve",
-			Suite:       "cpu",
-			Description: "Sieve of Eratosthenes to 5M",
-			Unit:        "ms",
+			Name:           "cpu-int-add",
+			Suite:          "cpu",
+			Description:    "lmbench integer add latency (ns per op)",
+			Unit:           "ns",
 			HigherIsBetter: false,
-			Command: `python3 -c "
-import time
-def sieve(n):
-    s=[True]*(n+1); s[0]=s[1]=False
-    for i in range(2,int(n**0.5)+1):
-        if s[i]:
-            for j in range(i*i,n+1,i): s[j]=False
-    return sum(s)
-N=5_000_000
-t=time.perf_counter()
-c=sieve(N)
-elapsed=time.perf_counter()-t
-print(f'{elapsed*1000:.2f}')
-"`,
-			ParseResult: parseFloat,
+			Command:        fmt.Sprintf(`%s/lat_ops 2>&1 | grep 'integer add' | awk '{print $NF}'`, lmbenchBinDir),
+			ParseResult:    parseFloat,
 		},
 		{
-			Name:        "multiproc-compute",
-			Suite:       "cpu",
-			Description: "Multi-process parallel compute: 4 workers x 10M ops",
-			Unit:        "Mops/s",
-			HigherIsBetter: true,
-			Command: `python3 -c "
-import multiprocessing,time
-def worker(_):
-    s=0
-    for i in range(10_000_000): s+=i*i
-    return s
-t=time.perf_counter()
-with multiprocessing.Pool(4) as p:
-    p.map(worker,range(4))
-elapsed=time.perf_counter()-t
-print(f'{4*10/elapsed:.2f}')
-"`,
-			ParseResult: parseFloat,
+			Name:           "cpu-int-div",
+			Suite:          "cpu",
+			Description:    "lmbench integer div latency (ns per op)",
+			Unit:           "ns",
+			HigherIsBetter: false,
+			Command:        fmt.Sprintf(`%s/lat_ops 2>&1 | grep 'integer div' | awk '{print $NF}'`, lmbenchBinDir),
+			ParseResult:    parseFloat,
 		},
 		{
-			Name:        "json-parse",
-			Suite:       "cpu",
-			Description: "JSON parse throughput: 50K objects x 5 rounds",
-			Unit:        "MB/s",
+			Name:           "cpu-double-add",
+			Suite:          "cpu",
+			Description:    "lmbench double-precision add latency (ns per op)",
+			Unit:           "ns",
+			HigherIsBetter: false,
+			Command:        fmt.Sprintf(`%s/lat_ops 2>&1 | grep 'double add' | awk '{print $NF}'`, lmbenchBinDir),
+			ParseResult:    parseFloat,
+		},
+		// --- Multi-core: openssl parallel ---
+		{
+			Name:           "cpu-aes-1t",
+			Suite:          "cpu",
+			Description:    "openssl AES-256-CBC single-thread throughput (16KB blocks, 10s)",
+			Unit:           "MB/s",
 			HigherIsBetter: true,
-			Command: `python3 -c "
-import json,time
-data=[{'id':i,'name':f'item_{i}','values':list(range(100))} for i in range(50000)]
-blob=json.dumps(data)
-t=time.perf_counter()
-for _ in range(5):
-    parsed=json.loads(blob)
-elapsed=time.perf_counter()-t
-print(f'{5*len(blob)/elapsed/1e6:.2f}')
-"`,
-			ParseResult: parseFloat,
+			Command:        `openssl speed -elapsed -seconds 10 -bytes 16384 aes-256-cbc 2>&1 | tail -1 | awk '{print $NF/1024/1024}'`,
+			ParseResult:    parseFloat,
+		},
+		{
+			Name:           "cpu-aes-mt",
+			Suite:          "cpu",
+			Description:    "openssl AES-256-CBC multi-thread throughput (16KB blocks, 10s, all cores)",
+			Unit:           "MB/s",
+			HigherIsBetter: true,
+			Command:        `openssl speed -elapsed -seconds 10 -bytes 16384 -multi $(nproc) aes-256-cbc 2>&1 | tail -1 | awk '{print $NF/1024/1024}'`,
+			ParseResult:    parseFloat,
+		},
+		{
+			Name:           "cpu-sha256-1t",
+			Suite:          "cpu",
+			Description:    "openssl SHA256 single-thread throughput (16KB blocks, 10s)",
+			Unit:           "MB/s",
+			HigherIsBetter: true,
+			Command:        `openssl speed -elapsed -seconds 10 -bytes 16384 sha256 2>&1 | tail -1 | awk '{print $NF/1024/1024}'`,
+			ParseResult:    parseFloat,
+		},
+		{
+			Name:           "cpu-sha256-mt",
+			Suite:          "cpu",
+			Description:    "openssl SHA256 multi-thread throughput (16KB blocks, 10s, all cores)",
+			Unit:           "MB/s",
+			HigherIsBetter: true,
+			Command:        `openssl speed -elapsed -seconds 10 -bytes 16384 -multi $(nproc) sha256 2>&1 | tail -1 | awk '{print $NF/1024/1024}'`,
+			ParseResult:    parseFloat,
+		},
+		// --- Inter-core communication: IPC ---
+		{
+			Name:           "cpu-ipc-unix-lat",
+			Suite:          "cpu",
+			Description:    "lmbench unix socket latency: inter-process round-trip (200 iterations)",
+			Unit:           "us",
+			HigherIsBetter: false,
+			Command:        fmt.Sprintf(`%s/lat_unix -N 200 2>&1`, lmbenchBinDir),
+			ParseResult:    parseLmbenchMicroseconds,
+		},
+		{
+			Name:           "cpu-ipc-unix-bw",
+			Suite:          "cpu",
+			Description:    "lmbench unix socket bandwidth: inter-process throughput",
+			Unit:           "MB/s",
+			HigherIsBetter: true,
+			Command:        fmt.Sprintf(`%s/bw_unix 2>&1`, lmbenchBinDir),
+			ParseResult:    parseLmbenchBW,
+		},
+		// --- CPU + memory mixed ---
+		{
+			Name:           "cpu-compress-gzip",
+			Suite:          "cpu",
+			Description:    "gzip compression throughput: 128MB random data (CPU+memory intensive)",
+			Unit:           "MB/s",
+			HigherIsBetter: true,
+			Command:        `dd if=/dev/urandom bs=1M count=128 2>/dev/null | { time -p gzip > /dev/null; } 2>&1 | awk '/^real/{printf "%.2f", 128/$2}'`,
+			ParseResult:    parseFloat,
 		},
 	}
 }

@@ -1,106 +1,89 @@
 package main
 
+import "fmt"
+
 func memoryWorkloads() []Workload {
 	return []Workload{
 		{
-			Name:        "seq-bandwidth",
-			Suite:       "memory",
-			Description: "Sequential memory bandwidth: copy 64MB x10",
-			Unit:        "GB/s",
+			Name:           "mem-bandwidth-rd",
+			Suite:          "memory",
+			Description:    "lmbench bw_mem: read bandwidth 128MB",
+			Unit:           "MB/s",
 			HigherIsBetter: true,
-			Command: `python3 -c "
-import time
-SIZE=64*1024*1024
-src=bytearray(SIZE)
-t=time.perf_counter()
-for _ in range(10):
-    dst=bytearray(src)
-elapsed=time.perf_counter()-t
-print(f'{10*SIZE/elapsed/1024/1024/1024:.2f}')
-"`,
-			ParseResult: parseFloat,
+			Command:        fmt.Sprintf(`%s/bw_mem 128m rd 2>&1`, lmbenchBinDir),
+			ParseResult:    parseLmbenchBW,
 		},
 		{
-			Name:        "random-latency",
-			Suite:       "memory",
-			Description: "Random memory access latency: 2M accesses",
-			Unit:        "ns/access",
+			Name:           "mem-bandwidth-wr",
+			Suite:          "memory",
+			Description:    "lmbench bw_mem: write bandwidth 128MB",
+			Unit:           "MB/s",
+			HigherIsBetter: true,
+			Command:        fmt.Sprintf(`%s/bw_mem 128m wr 2>&1`, lmbenchBinDir),
+			ParseResult:    parseLmbenchBW,
+		},
+		{
+			Name:           "mem-bandwidth-cp",
+			Suite:          "memory",
+			Description:    "lmbench bw_mem: copy bandwidth 128MB",
+			Unit:           "MB/s",
+			HigherIsBetter: true,
+			Command:        fmt.Sprintf(`%s/bw_mem 128m cp 2>&1`, lmbenchBinDir),
+			ParseResult:    parseLmbenchBW,
+		},
+		{
+			Name:           "mem-latency",
+			Suite:          "memory",
+			Description:    "lmbench lat_mem_rd: random access latency 128MB stride 64",
+			Unit:           "ns",
 			HigherIsBetter: false,
-			Command: `python3 -c "
-import time,random,array
-N=1024*1024
-arr=array.array('i',range(N))
-random.seed(42)
-indices=[random.randint(0,N-1) for _ in range(2_000_000)]
-t=time.perf_counter()
-s=0
-for i in indices: s+=arr[i]
-elapsed=time.perf_counter()-t
-print(f'{elapsed/len(indices)*1e9:.2f}')
-"`,
-			ParseResult: parseFloat,
+			Command:        fmt.Sprintf(`%s/lat_mem_rd -t 128m 64 2>&1`, lmbenchBinDir),
+			ParseResult:    parseLmbenchLatency,
 		},
 		{
-			Name:        "page-fault",
-			Suite:       "memory",
-			Description: "Page fault rate: mmap 256MB and touch each page",
-			Unit:        "Kpages/s",
+			Name:           "mem-sysbench-rd",
+			Suite:          "memory",
+			Description:    "sysbench memory read: sequential 1-thread, 8G total",
+			Unit:           "MiB/s",
 			HigherIsBetter: true,
-			Command: `python3 -c "
-import time,mmap,os
-SIZE=256*1024*1024
-fd=os.open('/dev/zero',os.O_RDONLY)
-t=time.perf_counter()
-m=mmap.mmap(fd,SIZE,mmap.MAP_PRIVATE,mmap.PROT_READ)
-total=0
-for off in range(0,SIZE,4096): total+=m[off]
-elapsed=time.perf_counter()-t
-pages=SIZE//4096
-print(f'{pages/elapsed/1000:.2f}')
-m.close();os.close(fd)
-"`,
-			ParseResult: parseFloat,
+			Command:        `sysbench memory --memory-block-size=1K --memory-total-size=8G --memory-oper=read --threads=1 run`,
+			ParseResult:    parseSysbenchMem,
 		},
 		{
-			Name:        "multiproc-mmap",
-			Suite:       "memory",
-			Description: "Multi-process mmap pressure: 4 workers x 200MB",
-			Unit:        "MB/s",
+			Name:           "mem-sysbench-wr",
+			Suite:          "memory",
+			Description:    "sysbench memory write: sequential 1-thread, 8G total",
+			Unit:           "MiB/s",
 			HigherIsBetter: true,
-			Command: `python3 -c "
-import multiprocessing,mmap,time
-def worker(_):
-    regions=[]
-    for _ in range(50):
-        m=mmap.mmap(-1,4*1024*1024)
-        m[0:4096]=b'x'*4096
-        regions.append(m)
-    for m in regions: m.close()
-t=time.perf_counter()
-with multiprocessing.Pool(4) as p:
-    p.map(worker,range(4))
-elapsed=time.perf_counter()-t
-print(f'{4*50*4/elapsed:.0f}')
-"`,
-			ParseResult: parseFloat,
+			Command:        `sysbench memory --memory-block-size=1K --memory-total-size=8G --memory-oper=write --threads=1 run`,
+			ParseResult:    parseSysbenchMem,
 		},
 		{
-			Name:        "large-alloc-fragment",
-			Suite:       "memory",
-			Description: "Heap fragmentation: 500K dict entries with lists",
-			Unit:        "ms",
+			Name:           "lat-mmap",
+			Suite:          "memory",
+			Description:    "lmbench lat_mmap: mmap latency 64MB file, 50 iterations",
+			Unit:           "us",
 			HigherIsBetter: false,
-			Command: `python3 -c "
-import time
-t=time.perf_counter()
-items={}
-for i in range(500_000):
-    items[f'key_{i}']=[i]*10
-total=sum(len(v) for v in items.values())
-elapsed=time.perf_counter()-t
-print(f'{elapsed*1000:.1f}')
-"`,
-			ParseResult: parseFloat,
+			Command:        fmt.Sprintf(`dd if=/dev/zero of=/tmp/bench_mmap bs=1M count=64 2>/dev/null && %s/lat_mmap -N 50 64m /tmp/bench_mmap 2>&1; rm -f /tmp/bench_mmap`, lmbenchBinDir),
+			ParseResult:    parseLmbenchMicroseconds,
+		},
+		{
+			Name:           "lat-pagefault",
+			Suite:          "memory",
+			Description:    "lmbench lat_pagefault: page fault latency, 50 iterations",
+			Unit:           "us",
+			HigherIsBetter: false,
+			Command:        fmt.Sprintf(`dd if=/dev/zero of=/tmp/bench_pf bs=1M count=64 2>/dev/null && %s/lat_pagefault -N 50 /tmp/bench_pf 2>&1; rm -f /tmp/bench_pf`, lmbenchBinDir),
+			ParseResult:    parseLmbenchMicroseconds,
+		},
+		{
+			Name:           "bw-mmap-rd",
+			Suite:          "memory",
+			Description:    "lmbench bw_mmap_rd: mmap read bandwidth 128MB",
+			Unit:           "MB/s",
+			HigherIsBetter: true,
+			Command:        fmt.Sprintf(`dd if=/dev/zero of=/tmp/bench_bwmmap bs=1M count=128 2>/dev/null && %s/bw_mmap_rd 128m open2close /tmp/bench_bwmmap 2>&1; rm -f /tmp/bench_bwmmap`, lmbenchBinDir),
+			ParseResult:    parseLmbenchBW,
 		},
 	}
 }
