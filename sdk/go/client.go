@@ -148,6 +148,9 @@ func (c *Client) createPayload(opts CreateOptions) (map[string]any, error) {
 	if len(network) > 0 {
 		payload["network"] = network
 	}
+	if opts.Prefault {
+		payload["prefault"] = true
+	}
 
 	for key, value := range opts.Extra {
 		payload[key] = value

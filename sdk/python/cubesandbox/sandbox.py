@@ -92,6 +92,7 @@ class Sandbox:
         metadata: Dict[str, str] | None = None,
         allow_internet_access: bool = True,
         network: Dict[str, Any] | None = None,
+        prefault: bool = False,
         config: Config | None = None,
         **kwargs: Any,
     ) -> "Sandbox":
@@ -102,6 +103,9 @@ class Sandbox:
             timeout: Sandbox TTL in seconds. Defaults to ``Config.timeout`` (300).
             env_vars: Environment variables injected into the sandbox.
             metadata: Arbitrary key-value metadata (e.g. network-policy, host-mount).
+            prefault: When True, all guest memory pages are prefaulted
+                (MAP_POPULATE) at mmap time instead of lazy-loaded on first
+                access. Defaults to False.
             config: SDK config. Uses default (env-based) config if omitted.
 
         Returns:
@@ -123,6 +127,8 @@ class Sandbox:
             payload["metadata"] = metadata
         if not allow_internet_access:
             payload["allow_internet_access"] = False
+        if prefault:
+            payload["prefault"] = True
         if network:
             net: dict = {}
             if "allow_public_traffic" in network:

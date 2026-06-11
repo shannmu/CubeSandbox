@@ -108,6 +108,11 @@ pub struct NewSandbox {
 
     #[serde(rename = "volumeMounts", skip_serializing_if = "Option::is_none")]
     pub volume_mounts: Option<Vec<SandboxVolumeMount>>,
+
+    /// When true, guest memory pages are prefaulted (MAP_POPULATE)
+    /// at mmap time instead of lazy-loaded on first access.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefault: Option<bool>,
 }
 
 fn default_timeout() -> i32 {

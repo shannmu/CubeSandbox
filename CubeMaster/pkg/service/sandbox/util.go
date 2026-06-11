@@ -617,7 +617,8 @@ func checkAndGetAnnotation(req *types.CreateCubeSandboxReq, out *cubebox.RunCube
 	for k, v := range req.Annotations {
 
 		if strings.HasPrefix(k, constants.CubeAnnotationsPrefix) ||
-			strings.HasPrefix(k, constants.CubeAnnotationsCloadPrefix) {
+			strings.HasPrefix(k, constants.CubeAnnotationsCloadPrefix) ||
+			strings.HasPrefix(k, "cube.vm.") {
 			out.Annotations[k] = v
 		}
 	}

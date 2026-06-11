@@ -54,6 +54,7 @@ type CreateOptions struct {
 	Metadata            map[string]string
 	AllowInternetAccess *bool
 	Network             NetworkOptions
+	Prefault            bool
 	Extra               map[string]any
 }
 

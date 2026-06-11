@@ -28,6 +28,9 @@ pub const ANNO_SNAPSHOT_BASE: &str = "cube.vm.snapshot.base.path";
 pub const ANNO_SNAPSHOT_MEMORY_VOL_URL: &str = "cube.vm.snapshot.memory_vol_url";
 pub const ANNO_APP_SNAPSHOT_CREATE: &str = "cube.appsnapshot.create";
 pub const ANNO_APP_SNAPSHOT_RESTORE: &str = "cube.appsnapshot.restore";
+/// When set to "true", all guest memory pages are prefaulted (MAP_POPULATE)
+/// at mmap time instead of being loaded on-demand via page faults.
+pub const ANNO_VM_PREFAULT: &str = "cube.vm.snapshot.prefault";
 
 pub const SHARE_CACHE_ALWAYS: u8 = 1;
 pub const SHARE_CACHE_NEVER: u8 = 2;
@@ -60,6 +63,9 @@ pub struct Config {
     pub app_snapshot_restore: bool,
     /// Extra kernel cmdline parameters injected through annotations.
     pub extra_kernel_params: Vec<String>,
+    /// When true, all guest memory pages are prefaulted (MAP_POPULATE)
+    /// at mmap time instead of lazy-loaded on first access.
+    pub prefault: bool,
 }
 
 impl Config {
@@ -190,6 +196,11 @@ impl Config {
             Vec::new()
         };
 
+        let prefault = anno
+            .get(ANNO_VM_PREFAULT)
+            .map(|v| v.trim().eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+
         let c = Config {
             net,
             disk,
@@ -212,6 +223,7 @@ impl Config {
             app_snapshot_create,
             app_snapshot_restore,
             extra_kernel_params,
+            prefault,
         };
         Ok(c)
     }

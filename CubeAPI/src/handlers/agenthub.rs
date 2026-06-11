@@ -281,6 +281,7 @@ pub async fn create_agent_instance(
             env_vars: None,
             mcp: None,
             volume_mounts: None,
+            prefault: None,
         })
         .await?;
 
@@ -921,6 +922,7 @@ pub async fn clone_agent_instance(
             env_vars: None,
             mcp: None,
             volume_mounts: None,
+            prefault: None,
         })
         .await
         .map_err(|err| {

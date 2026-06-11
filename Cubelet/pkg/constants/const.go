@@ -236,6 +236,7 @@ const (
 
 	AnnotationVMSnapshotPath           = "cube.vm.snapshot.base.path"
 	AnnotationVMSnapshotMemoryVolURL   = "cube.vm.snapshot.memory_vol_url"
+	AnnotationVMSnapshotPrefault       = "cube.vm.snapshot.prefault"
 	AnnotationPmemContainerPrefix      = "pmem-cntr"
 	AnnotationPmemLangPrefix           = "pmem-lang"
 	AnnotationPmemCubeBoxImageIDPrefix = "pmem-cubebox-image"

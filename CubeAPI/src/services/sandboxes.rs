@@ -133,6 +133,13 @@ impl SandboxService {
             meta
         });
 
+        if body.prefault.unwrap_or(false) {
+            annotations.insert(
+                "cube.vm.snapshot.prefault".to_string(),
+                "true".to_string(),
+            );
+        }
+
         let req = CreateSandboxRequest {
             request_id: new_request_id(),
             instance_type: self.instance_type.clone(),

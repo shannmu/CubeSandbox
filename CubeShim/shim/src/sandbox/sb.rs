@@ -720,6 +720,7 @@ impl SandBox {
             .add_disks(&self.conf.disk)
             .add_virtiofs(&self.conf.virtiofs)
             .add_vsock(self.id.clone());
+        vc.prefault = self.conf.prefault;
 
         if let Some(fs) = self.conf.fs.as_ref() {
             vc.add_fs(fs);
@@ -882,6 +883,7 @@ impl SandBox {
             pmem: Some(pmems),
             vsock: Some(vsock),
             memory_vol_url: restore_memory_vol_url,
+            prefault: self.conf.prefault,
             ..Default::default()
         };
 

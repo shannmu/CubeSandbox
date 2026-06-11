@@ -226,6 +226,11 @@ func (e *cubeboxInstancePlugin) CreateSandbox(ctx context.Context, flowOpts *wor
 
 		annotations[constants.AnnotationAppSnapshotContainerID] = snapshotRestoreContainerID(templateID, snapSpecPath)
 
+		// Propagate prefault request to CubeShim
+		if prefaultVal := realReq.GetAnnotations()[constants.AnnotationVMSnapshotPrefault]; prefaultVal == "true" {
+			annotations[constants.AnnotationVMSnapshotPrefault] = "true"
+		}
+
 		sandbox := cubeboxstore.GetCubeBox(ctx)
 		if sandbox != nil && sandbox.FirstContainer() != nil {
 			opts, err := generateRestoreVirtiofsOpt(ctx, flowOpts, sandbox.FirstContainer().Config)
@@ -243,6 +248,12 @@ func (e *cubeboxInstancePlugin) CreateSandbox(ctx context.Context, flowOpts *wor
 	} else {
 
 		annotations[constants.AnnotationSnapshotDisable] = "true"
+
+		// Propagate prefault request to CubeShim for boot mode
+		if prefaultVal := realReq.GetAnnotations()[constants.AnnotationVMSnapshotPrefault]; prefaultVal == "true" {
+			annotations[constants.AnnotationVMSnapshotPrefault] = "true"
+		}
+
 		sandbox := cubeboxstore.GetCubeBox(ctx)
 		if sandbox != nil && sandbox.FirstContainer() != nil {
 			opts, err := generateSandboxVirtiofsOpt(ctx, flowOpts, true)

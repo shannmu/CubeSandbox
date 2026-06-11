@@ -55,6 +55,7 @@ pub struct VmConfig {
     pub vcpus: u32,
     pub memory_size: u64,
     pub dirty_log: bool,
+    pub prefault: bool,
     pub cmdlines: Vec<String>,
     pub kernel: String,
     pub disks: Option<Vec<DiskConfig>>,
@@ -104,6 +105,7 @@ impl Default for VmConfig {
             vcpus: 0,
             memory_size: 0,
             dirty_log: false,
+            prefault: false,
             cmdlines: params,
             kernel: String::default(),
             disks: Some(Vec::new()),
@@ -138,6 +140,7 @@ impl VmConfig {
 
         vc.memory.size = self.memory_size * MI_B;
         vc.memory.dirty_log = self.dirty_log;
+        vc.memory.prefault = self.prefault;
 
         let cmds = self.cmdlines.join(" ").to_string();
         let payload = PayloadConfig {
