@@ -113,7 +113,7 @@ func runReal(ctx context.Context, cfg *Config, suites []Suite, run *BenchmarkRun
 		var workloadResults []WorkloadResult
 
 		for _, wl := range suite.Workloads {
-			createOpts := cubesandbox.CreateOptions{}
+			createOpts := cubesandbox.CreateOptions{Prefault: cfg.Prefault}
 			if wl.Suite == "network" && cfg.IperfServerIP != "" {
 				allowInternet := true
 				createOpts.AllowInternetAccess = &allowInternet
@@ -271,7 +271,7 @@ func benchmarkCreate(ctx context.Context, cfg *Config, client *cubesandbox.Clien
 
 	for i := 0; i < cfg.Warmup+cfg.Iterations; i++ {
 		t0 := time.Now()
-		sandbox, err := client.Create(ctx, cubesandbox.CreateOptions{})
+		sandbox, err := client.Create(ctx, cubesandbox.CreateOptions{Prefault: cfg.Prefault})
 		elapsed := float64(time.Since(t0).Microseconds()) / 1000.0
 
 		if err != nil {
@@ -303,7 +303,7 @@ func benchmarkCreate(ctx context.Context, cfg *Config, client *cubesandbox.Clien
 func benchmarkSnapshot(ctx context.Context, cfg *Config, client *cubesandbox.Client, progressCh chan<- ProgressEvent) WorkloadResult {
 	wr := WorkloadResult{Name: "snapshot", Unit: "ms", HigherIsBetter: false}
 
-	sandbox, err := client.Create(ctx, cubesandbox.CreateOptions{})
+	sandbox, err := client.Create(ctx, cubesandbox.CreateOptions{Prefault: cfg.Prefault})
 	if err != nil {
 		wr.Errors = append(wr.Errors, fmt.Sprintf("setup: %v", err))
 		return wr
@@ -343,7 +343,7 @@ func benchmarkSnapshot(ctx context.Context, cfg *Config, client *cubesandbox.Cli
 func benchmarkRollback(ctx context.Context, cfg *Config, client *cubesandbox.Client, progressCh chan<- ProgressEvent) WorkloadResult {
 	wr := WorkloadResult{Name: "rollback", Unit: "ms", HigherIsBetter: false}
 
-	sandbox, err := client.Create(ctx, cubesandbox.CreateOptions{})
+	sandbox, err := client.Create(ctx, cubesandbox.CreateOptions{Prefault: cfg.Prefault})
 	if err != nil {
 		wr.Errors = append(wr.Errors, fmt.Sprintf("setup: %v", err))
 		return wr
@@ -389,7 +389,7 @@ func benchmarkRollback(ctx context.Context, cfg *Config, client *cubesandbox.Cli
 func benchmarkClone(ctx context.Context, cfg *Config, client *cubesandbox.Client, progressCh chan<- ProgressEvent) WorkloadResult {
 	wr := WorkloadResult{Name: "clone", Unit: "ms", HigherIsBetter: false}
 
-	sandbox, err := client.Create(ctx, cubesandbox.CreateOptions{})
+	sandbox, err := client.Create(ctx, cubesandbox.CreateOptions{Prefault: cfg.Prefault})
 	if err != nil {
 		wr.Errors = append(wr.Errors, fmt.Sprintf("setup: %v", err))
 		return wr
@@ -406,7 +406,7 @@ func benchmarkClone(ctx context.Context, cfg *Config, client *cubesandbox.Client
 			}
 			continue
 		}
-		clone, cloneErr := client.Create(ctx, cubesandbox.CreateOptions{})
+		clone, cloneErr := client.Create(ctx, cubesandbox.CreateOptions{Prefault: cfg.Prefault})
 		elapsed := float64(time.Since(t0).Microseconds()) / 1000.0
 		if cloneErr != nil {
 			if i >= cfg.Warmup {
@@ -618,16 +618,16 @@ func runDry(_ context.Context, cfg *Config, suites []Suite, run *BenchmarkRun, p
 
 var dryBaselines = map[string]float64{
 	// cpu
-	"cpu-int-add":        0.8,
-	"cpu-int-div":        5.0,
-	"cpu-double-add":     1.2,
-	"cpu-aes-1t":         900.0,
-	"cpu-aes-mt":         3200.0,
-	"cpu-sha256-1t":      600.0,
-	"cpu-sha256-mt":      2100.0,
-	"cpu-ipc-unix-lat":   8.0,
-	"cpu-ipc-unix-bw":    5000.0,
-	"cpu-compress-gzip":  80.0,
+	"cpu-int-add":       0.8,
+	"cpu-int-div":       5.0,
+	"cpu-double-add":    1.2,
+	"cpu-aes-1t":        900.0,
+	"cpu-aes-mt":        3200.0,
+	"cpu-sha256-1t":     600.0,
+	"cpu-sha256-mt":     2100.0,
+	"cpu-ipc-unix-lat":  8.0,
+	"cpu-ipc-unix-bw":   5000.0,
+	"cpu-compress-gzip": 80.0,
 	// memory
 	"mem-bandwidth-rd": 12000.0,
 	"mem-bandwidth-wr": 8000.0,
@@ -640,8 +640,8 @@ var dryBaselines = map[string]float64{
 	"lat-pagefault": 3.0,
 	"bw-mmap-rd":    10000.0,
 	// disk (fio)
-	"seq-write":    450.0,
-	"seq-read":     1200.0,
+	"seq-write":         450.0,
+	"seq-read":          1200.0,
 	"rand-read-4k":      15000.0,
 	"rand-write-4k":     8000.0,
 	"fsync-latency":     250.0,
@@ -650,8 +650,8 @@ var dryBaselines = map[string]float64{
 	// network
 	"tcp-stream":   25.0,
 	"tcp-parallel": 40.0,
-	"udp-pps":     50000.0,
-	"lat-connect": 30.0,
+	"udp-pps":      50000.0,
+	"lat-connect":  30.0,
 	// syscall (lmbench, microseconds)
 	"lat-syscall-null":  0.1,
 	"lat-syscall-read":  0.15,
@@ -674,4 +674,3 @@ func dryValue(wl Workload) float64 {
 	jitter := (rand.Float64() - 0.5) * 0.1 * base
 	return base + jitter
 }
-

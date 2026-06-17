@@ -10,24 +10,25 @@ import (
 )
 
 type Config struct {
-	Suites      []string
-	Iterations  int
-	Warmup      int
-	Concurrency int
-	Output      string
-	Baseline    string
-	Label       string
-	Template    string
-	APIURL      string
-	APIKey      string
-	Timeout     time.Duration
-	ThemeName   string
-	NoTUI       bool
-	JSONOnly    bool
-	Verbose     bool
-	DryRun         bool
-	Local          bool
-	Observe        bool
+	Suites          []string
+	Iterations      int
+	Warmup          int
+	Concurrency     int
+	Output          string
+	Baseline        string
+	Label           string
+	Template        string
+	APIURL          string
+	APIKey          string
+	Timeout         time.Duration
+	ThemeName       string
+	NoTUI           bool
+	JSONOnly        bool
+	Verbose         bool
+	DryRun          bool
+	Local           bool
+	Observe         bool
+	Prefault        bool
 	IperfServerIP   string
 	IperfServerPort string
 }
@@ -64,6 +65,7 @@ func parseConfig() *Config {
 	flag.BoolVar(&cfg.DryRun, "dry-run", false, "Simulate workloads with synthetic data")
 	flag.BoolVar(&cfg.Local, "local", false, "Run benchmarks locally (for ECS baseline) instead of in a sandbox")
 	flag.BoolVar(&cfg.Observe, "observe", false, "Collect host-side RSS/CPU metrics during workload execution")
+	flag.BoolVar(&cfg.Prefault, "prefault", false, "Enable memory prefault (MAP_POPULATE) for sandbox creation")
 	flag.StringVar(&cfg.IperfServerIP, "iperf-server-ip", "", "iperf3 server IP (overrides IPERF3_SERVER_IP)")
 	flag.StringVar(&cfg.IperfServerPort, "iperf-server-port", "", "iperf3 server port (overrides IPERF3_SERVER_PORT, default: 5201)")
 

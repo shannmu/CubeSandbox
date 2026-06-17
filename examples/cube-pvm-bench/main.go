@@ -165,6 +165,9 @@ func renderConfigPanel(cfg *Config) {
 	if cfg.Label != "" {
 		kvs = append(kvs, kvPair{"Label", T.Accent.Render(cfg.Label)})
 	}
+	if cfg.Prefault {
+		kvs = append(kvs, kvPair{"Prefault", "enabled (MAP_POPULATE)"})
+	}
 	if cfg.Baseline != "" {
 		kvs = append(kvs, kvPair{"Baseline", cfg.Baseline})
 	}
